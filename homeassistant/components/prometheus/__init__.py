@@ -39,6 +39,23 @@ from homeassistant.const import (
     STATE_UNKNOWN,
     UnitOfTemperature,
 )
+from homeassistant.components.weather import (
+    ATTR_CONDITION_CLEAR_NIGHT,
+    ATTR_CONDITION_CLOUDY,
+    ATTR_CONDITION_EXCEPTIONAL,
+    ATTR_CONDITION_FOG,
+    ATTR_CONDITION_HAIL,
+    ATTR_CONDITION_LIGHTNING,
+    ATTR_CONDITION_LIGHTNING_RAINY,
+    ATTR_CONDITION_PARTLYCLOUDY,
+    ATTR_CONDITION_POURING,
+    ATTR_CONDITION_RAINY,
+    ATTR_CONDITION_SNOWY,
+    ATTR_CONDITION_SNOWY_RAINY,
+    ATTR_CONDITION_SUNNY,
+    ATTR_CONDITION_WINDY,
+    ATTR_CONDITION_WINDY_VARIANT
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entityfilter, state as state_helper
 import homeassistant.helpers.config_validation as cv
@@ -256,17 +273,20 @@ class PrometheusMetrics:
 
     def _handle_attributes(self, state):
         for key, value in state.attributes.items():
-            metric = self._metric(
-                f"{state.domain}_attr_{key.lower()}",
-                self.prometheus_cli.Gauge,
-                f"{key} attribute of {state.domain} entity",
-            )
+            self._add_attribute(state, key, value)
+    
+    def _add_attribute(self, state, attribute_name, attribute_value):
+        metric = self._metric(
+            f"{state.domain}_attr_{attribute_name.lower()}",
+            self.prometheus_cli.Gauge,
+            f"{attribute_name} attribute of {state.domain} entity",
+        )
 
-            try:
-                value = float(value)
-                metric.labels(**self._labels(state)).set(value)
-            except (ValueError, TypeError):
-                pass
+        try:
+            value = float(attribute_value)
+            metric.labels(**self._labels(state)).set(value)
+        except (ValueError, TypeError):
+            pass
 
     def _metric(self, metric, factory, documentation, extra_labels=None):
         labels = ["entity", "friendly_name", "domain"]
@@ -649,6 +669,40 @@ class PrometheusMetrics:
             pass
 
         self._handle_attributes(state)
+    
+    def _handle_weather(self, state):
+        metric = self._metric(
+            "weather_condition",
+            self.prometheus_cli.Gauge,
+            "Weather condition (0/1)",
+            ["condition"]
+        )
+
+        weather_conditions = [
+            ATTR_CONDITION_CLEAR_NIGHT,ATTR_CONDITION_CLOUDY,ATTR_CONDITION_EXCEPTIONAL,ATTR_CONDITION_FOG,
+            ATTR_CONDITION_HAIL,ATTR_CONDITION_LIGHTNING,ATTR_CONDITION_LIGHTNING_RAINY,ATTR_CONDITION_PARTLYCLOUDY,
+            ATTR_CONDITION_POURING,ATTR_CONDITION_RAINY,ATTR_CONDITION_SNOWY,ATTR_CONDITION_SNOWY_RAINY,
+            ATTR_CONDITION_SUNNY,ATTR_CONDITION_WINDY,ATTR_CONDITION_WINDY_VARIANT
+        ]
+        for condition in weather_conditions:
+            metric.labels(**dict(self._labels(state), condition=condition)).set(
+                float(condition == state.state)
+            )
+
+        for key, value in state.attributes.items():
+            metric_name = key
+            if not metric_name.endswith("_unit"):
+                e = state.attributes.get(f"{metric_name}_unit")
+                if e is not None:
+                    if e == UnitOfTemperature.FAHRENHEIT:
+                        value = TemperatureConverter.convert(
+                            value, UnitOfTemperature.FAHRENHEIT, UnitOfTemperature.CELSIUS
+                        )
+                        e = UnitOfTemperature.CELSIUS
+                    unit_string = self._unit_string(e)
+                    metric_name = f"{metric_name}_{unit_string}"
+
+                self._add_attribute(state, metric_name, value)
 
     def _handle_zwave(self, state):
         self._battery(state)
